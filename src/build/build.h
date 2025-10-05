@@ -569,6 +569,7 @@ typedef struct BuildOptions_
 	const char *obj_out;
 	const char *script_dir;
 	const char **emit_only;
+	const char **riscv_extensions;
 	RelocModel reloc_model;
 	X86VectorCapability x86_vector_capability;
 	X86CpuSet x86_cpu_set;
@@ -743,6 +744,7 @@ typedef struct
 	AuthorEntry *authors;
 	const char **feature_list;
 	const char *custom_linker_path;
+	const char **riscv_extensions;
 	struct
 	{
 		WinDebug win_debug;

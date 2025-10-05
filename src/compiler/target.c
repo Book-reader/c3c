@@ -254,6 +254,37 @@ static inline void target_setup_arm_abi(void)
 	UNREACHABLE_VOID
 }
 
+static inline void target_setup_riscv_abi(BuildTarget *target)
+{
+	compiler.platform.riscv.xlen = arch_pointer_bit_width(compiler.platform.os, compiler.platform.arch) / 8; // pointer width
+	switch (target->feature.riscv_float_capability)
+	{
+		case RISCVFLOAT_DEFAULT:
+			compiler.platform.riscv.flen = 0;
+			break;
+		case RISCVFLOAT_NONE:
+		case RISCVFLOAT_FLOAT:
+		case RISCVFLOAT_DOUBLE:
+			compiler.platform.riscv.flen = 4 * target->feature.riscv_float_capability;
+			break;
+	}
+	compiler.platform.abi = ABI_RISCV;
+	scratch_buffer_clear();
+	FOREACH(const char *, extension, target->riscv_extensions)
+	{
+		if (extension[0] == '-')
+		{
+			scratch_buffer_append(extension);
+		}
+		else
+		{
+			scratch_buffer_printf("+%s", extension);
+		}
+		scratch_buffer_append(",");
+	}
+	compiler.platform.features = scratch_buffer_copy();
+}
+
 static inline void target_setup_x86_abi(BuildTarget *target)
 {
 	compiler.platform.abi = ABI_X86;
@@ -2014,6 +2045,8 @@ void target_setup(BuildTarget *target)
 	compiler.platform.width_c_long = os_target_c_type_bits(compiler.platform.os, compiler.platform.arch, CTYPE_LONG);
 	compiler.platform.width_c_long_long = os_target_c_type_bits(compiler.platform.os, compiler.platform.arch, CTYPE_LONG_LONG);
 	compiler.platform.signed_c_char = os_target_signed_c_char_type(compiler.platform.os, compiler.platform.arch);
+
+	compiler.platform.cpu = target->cpu;
 	switch (compiler.platform.arch)
 	{
 		case ARCH_UNSUPPORTED:
@@ -2058,19 +2091,7 @@ void target_setup(BuildTarget *target)
 			break;
 		case ARCH_TYPE_RISCV64:
 		case ARCH_TYPE_RISCV32:
-			compiler.platform.riscv.xlen = arch_pointer_bit_width(compiler.platform.os, compiler.platform.arch) / 8; // pointer width
-			switch (target->feature.riscv_float_capability)
-			{
-				case RISCVFLOAT_DEFAULT:
-					compiler.platform.riscv.flen = 0;
-					break;
-				case RISCVFLOAT_NONE:
-				case RISCVFLOAT_FLOAT:
-				case RISCVFLOAT_DOUBLE:
-					compiler.platform.riscv.flen = 4 * target->feature.riscv_float_capability;
-					break;
-			}
-			compiler.platform.abi = ABI_RISCV;
+			target_setup_riscv_abi(target);
 			break;
 		case ARCH_TYPE_X86:
 			target_setup_x86_abi(target);

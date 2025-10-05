@@ -445,6 +445,7 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 	OVERRIDE_IF_SET(linuxpaths.crtbegin);
 	OVERRIDE_IF_SET(android.ndk_path);
 	OVERRIDE_IF_SET(android.api_version);
+	OVERRIDE_IF_SET(riscv_extensions);
 
 	if (!target->max_vector_size) target->max_vector_size = DEFAULT_VECTOR_WIDTH;
 	if (!target->max_stack_object_size) target->max_stack_object_size = DEFAULT_STACK_OBJECT_SIZE;

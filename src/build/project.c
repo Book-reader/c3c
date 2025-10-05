@@ -66,6 +66,7 @@ const char *project_default_keys[][2] = {
 		{"x86cpu", "Set general level of x64 cpu: baseline, ssse3, sse4, avx1, avx2-v1, avx2-v2 (Skylake/Zen1+), avx512 (Icelake/Zen4+), native."},
 		{"x86vec", "Set max type of vector use: none, mmx, sse, avx, avx512, native."},
 		{"linux-crtbegin", "Set the directory to use for finding crtbegin.o and related files."},
+		{"riscv-extensions", "The RISC-V extensions to use, prefix extension with '-' to disable"},
 };
 
 const int project_default_keys_count = ELEMENTLEN(project_default_keys);
@@ -143,6 +144,7 @@ const char* project_target_keys[][2] = {
 		{"x86cpu", "Set general level of x64 cpu: baseline, ssse3, sse4, avx1, avx2-v1, avx2-v2 (Skylake/Zen1+), avx512 (Icelake/Zen4+), native."},
 		{"x86vec", "Set max type of vector use: none, mmx, sse, avx, avx512, native."},
 		{"linux-crtbegin", "Set the directory to use for finding crtbegin.o and related files."},
+		{"riscv-extensions", "The RISC-V extensions to use, prefix extension with '-' to disable"},
 };
 
 const int project_target_keys_count = ELEMENTLEN(project_target_keys);
@@ -397,6 +399,21 @@ static void load_into_build_target(BuildParseContext context, JSONObject *json, 
 	// riscvfloat
 	RiscvFloatCapability riscv_float = GET_SETTING(RiscvFloatCapability, "riscvfloat", riscv_capability, "`none`, `float` or `double`.");
 	if (riscv_float != RISCVFLOAT_DEFAULT) target->feature.riscv_float_capability = riscv_float;
+
+	// riscv-extensions
+	const char **riscv_extensions = get_optional_string_array(context, json, "riscv-extensions");
+	if (riscv_extensions)
+	{
+		FOREACH(const char *, extension, riscv_extensions)
+		{
+			if (extension[0] == '-' ? !str_is_valid_lowercase_name(&extension[1]) : !str_is_valid_lowercase_name(extension))
+			{
+				error_exit("Error reading 'riscv-extensions': '%s' is not a valid extension name.", extension);
+			}
+			vec_add(target->riscv_extensions, extension);
+		}
+	}
+
 
 	// win-debug
 	WinDebug win_debug = GET_SETTING(WinDebug , "win-debug", win_debug_type, "`codeview` or `dwarf`.");

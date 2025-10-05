@@ -259,6 +259,7 @@ static void view_target(BuildParseContext context, JSONObject *target, bool verb
 	TARGET_VIEW_SETTING("x64 CPU level", "x86cpu", x86_cpu_set);
 	TARGET_VIEW_SETTING("Max vector use type", "x86vec", x86_vector_capability);
 	TARGET_VIEW_BOOL("Return structs on the stack", "x86-stack-struct-return");
+	TARGET_VIEW_STRING_ARRAY("RISC-V Extensions", "riscv-extensions", ", ");
 }
 
 

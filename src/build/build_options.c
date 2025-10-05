@@ -170,6 +170,7 @@ static void usage(bool full)
 		print_opt("--reloc=<option>", "Relocation model: none, pic, PIC, pie, PIE.");
 		print_opt("--x86cpu=<option>", "Set general level of x64 cpu: baseline, ssse3, sse4, avx1, avx2-v1, avx2-v2 (Skylake/Zen1+), avx512 (Icelake/Zen4+), native.");
 		print_opt("--x86vec=<option>", "Set max type of vector use: none, mmx, sse, avx, avx512, default.");
+		print_opt("--riscvext <extension>", "Enable a RISC-V extension, prefix with '-' to disable");
 		print_opt("--riscvfloat=<option>", "Set type of RISC-V float support: none, float, double.");
 		print_opt("--memory-env=<option>", "Set the memory environment: normal, small, tiny, none.");
 		print_opt("--strip-unused=<yes|no>", "Strip unused code and globals from the output. (default: yes)");
@@ -845,6 +846,12 @@ static void parse_option(BuildOptions *options)
 			{
 				options->run_once = true;
 				if (!options->verbosity_level) options->verbosity_level = -1;
+				return;
+			}
+			if (match_longopt("riscvext"))
+			{
+				if (at_end()) error_exit("error: --riscvext needs an argument");
+				vec_add(options->riscv_extensions, next_arg());
 				return;
 			}
 			if ((argopt = match_argopt("fp-math")))
