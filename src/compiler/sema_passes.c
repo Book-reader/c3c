@@ -3,6 +3,7 @@
 // a copy of which can be found in the LICENSE file.
 
 #include "sema_internal.h"
+#include "compiler_tests/benchmark.h"
 
 void parent_path(StringSlice *slice)
 {
@@ -259,6 +260,7 @@ static bool exec_arg_append_to_scratch(Expr *arg)
 
 static Decl **sema_run_exec(CompilationUnit *unit, Decl *decl)
 {
+	double bench = bench_mark();
 	if (compiler.build.trust_level < TRUST_FULL)
 	{
 		RETURN_PRINT_ERROR_AT(NULL, decl, "'$exec' not permitted, trust level must be set to '--trust=full' to permit it.");
@@ -338,6 +340,7 @@ static Decl **sema_run_exec(CompilationUnit *unit, Decl *decl)
 	{
 		RETURN_PRINT_ERROR_AT(NULL, decl, "This $include would cause the maximum number of includes (%d) to be exceeded.", MAX_INCLUDE_DIRECTIVES);
 	}
+	compiler.exec_time += bench_mark() - bench;
 	return parse_include_file(file, unit);
 }
 
@@ -491,13 +494,13 @@ CHECK_LINK:
 			unsigned args = vec_size(exprs);
 			ASSERT(args > 0 && "Should already have been checked.");
 			Expr *cond = args > 1 ? attr->exprs[0] : NULL;
-			if (cond && !sema_analyse_expr(&context, cond)) goto FAIL_CONTEXT;
+			if (cond && !sema_analyse_expr_rvalue(&context, cond)) goto FAIL_CONTEXT;
 			bool start = cond && expr_is_const_bool(cond) ? 1 : 0;
 			bool add = start == 0 ? true : cond->const_expr.b;
 			for (unsigned i = start; i < args; i++)
 			{
 				Expr *string = attr->exprs[i];
-				if (!sema_analyse_expr(&context, string)) goto FAIL_CONTEXT;
+				if (!sema_analyse_expr_rvalue(&context, string)) goto FAIL_CONTEXT;
 				if (!expr_is_const_string(string))
 				{
 					PRINT_ERROR_AT(string, "Expected a constant string here, usage is: "
@@ -622,10 +625,10 @@ INLINE void sema_analyse_inner_func_ptr(SemaContext *c, Decl *decl)
 	Type *inner;
 	switch (decl->decl_kind)
 	{
-		case DECL_DISTINCT:
+		case DECL_TYPEDEF:
 			inner = decl->distinct->type;
 			break;
-		case DECL_TYPEDEF:
+		case DECL_TYPE_ALIAS:
 			inner = decl->type->canonical;
 			break;
 		default:
@@ -774,7 +777,7 @@ void sema_analysis_pass_interface(Module *module)
 		{
 			switch (decl->decl_kind)
 			{
-				case DECL_DISTINCT:
+				case DECL_TYPEDEF:
 				case DECL_STRUCT:
 				case DECL_UNION:
 				case DECL_ENUM:

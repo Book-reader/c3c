@@ -278,6 +278,14 @@ static void skip_whitespace(Lexer *lexer)
 			case '\r':
 				// Already filtered out.
 				UNREACHABLE_VOID
+			case '#':
+				if (lexer->file_begin == lexer->current && peek_next(lexer) == '!')
+				{
+					skip(lexer, 2);
+					parse_line_comment(lexer);
+					continue;
+				}
+				return;
 			default:
 				return;
 		}
@@ -1353,7 +1361,7 @@ static bool lexer_scan_token_inner(Lexer *lexer)
 		case '+':
 			if (match(lexer, '+'))
 			{
-				if (match(lexer, '+')) return new_token(lexer, TOKEN_CT_CONCAT, "+++");
+				if (match(lexer, '+')) return match(lexer, '=') ? new_token(lexer, TOKEN_CT_CONCAT_ASSIGN, "+++=") : new_token(lexer, TOKEN_CT_CONCAT, "+++");
 				return new_token(lexer, TOKEN_PLUSPLUS, "++");
 			}
 			if (match(lexer, '=')) return new_token(lexer, TOKEN_PLUS_ASSIGN, "+=");

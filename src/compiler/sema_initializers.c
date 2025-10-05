@@ -330,9 +330,9 @@ static inline bool sema_expr_analyse_array_plain_initializer(SemaContext *contex
 	// We have the case where "Foo = int[*]"
 	if (inferred_len && !type_len_is_inferred(assigned))
 	{
-		ASSERT(assigned->type_kind == TYPE_TYPEDEF);
-		ASSERT(assigned->decl->decl_kind == DECL_TYPEDEF);
-		while (assigned->type_kind == TYPE_TYPEDEF) assigned = assigned->decl->type;
+		ASSERT(assigned->type_kind == TYPE_ALIAS);
+		ASSERT(assigned->decl->decl_kind == DECL_TYPE_ALIAS);
+		while (assigned->type_kind == TYPE_ALIAS) assigned = assigned->decl->type;
 		ASSERT(type_len_is_inferred(assigned));
 	}
 	// Prefer the typedef index: define Bar = int; Bar[1] => Bar and not int
@@ -479,7 +479,7 @@ static inline bool sema_expr_analyse_untyped_initializer(SemaContext *context, E
 	Expr **init_list = initializer->initializer_list;
 	FOREACH(Expr *, element, init_list)
 	{
-		if (!sema_analyse_expr(context, element)) return false;
+		if (!sema_analyse_expr_rvalue(context, element)) return false;
 		if (!sema_cast_const(element))
 		{
 			if (no_match_ref)
@@ -545,7 +545,14 @@ static bool sema_expr_analyse_designated_initializer(SemaContext *context, Type 
 	Type *type;
 	if (!is_structlike && is_inferred)
 	{
-		 type = type_from_inferred(flattened, type_get_indexed_type(assigned), (ArraySize)(max_index + 1));
+		if (type_is_infer_type(flattened))
+		{
+			type = type_from_inferred(flattened, inner_type, (ArraySize)(max_index + 1));
+		}
+		else
+		{
+			type = type_from_inferred(flattened, inner_type, flattened->array.len);
+		}
 	}
 	else
 	{
@@ -620,6 +627,7 @@ static inline bool sema_expr_analyse_initializer(SemaContext *context, Type *ass
 		flattened->type_kind == TYPE_ARRAY ||
 		flattened->type_kind == TYPE_INFERRED_ARRAY ||
 		flattened->type_kind == TYPE_INFERRED_VECTOR ||
+		flattened->type_kind == TYPE_FLEXIBLE_ARRAY ||
 		flattened->type_kind == TYPE_SLICE ||
 		flattened->type_kind == TYPE_VECTOR)
 	{
@@ -817,6 +825,7 @@ bool sema_expr_analyse_initializer_list(SemaContext *context, Type *to, Expr *ex
 		case TYPE_BITSTRUCT:
 		case TYPE_INFERRED_ARRAY:
 		case TYPE_INFERRED_VECTOR:
+		case TYPE_FLEXIBLE_ARRAY:
 		case TYPE_VECTOR:
 			return sema_expr_analyse_initializer(context, to, flattened, expr, no_match_ref);
 		case TYPE_SLICE:
@@ -839,7 +848,7 @@ bool sema_expr_analyse_initializer_list(SemaContext *context, Type *to, Expr *ex
 			}
 			expr->resolve_status = RESOLVE_DONE;
 			expr_insert_addr(expr);
-			if (!sema_analyse_expr(context, expr)) return false;
+			if (!sema_analyse_expr_rvalue(context, expr)) return false;
 			if (no_match_ref)
 			{
 				if (!cast_explicit_silent(context, expr, to)) goto NO_MATCH;
@@ -859,7 +868,7 @@ bool sema_expr_analyse_initializer_list(SemaContext *context, Type *to, Expr *ex
 		case TYPE_VOID:
 		case TYPE_POISONED:
 		case TYPE_FUNC_RAW:
-		case TYPE_TYPEDEF:
+		case TYPE_ALIAS:
 		case TYPE_OPTIONAL:
 		case TYPE_TYPEINFO:
 		case TYPE_MEMBER:
@@ -1313,7 +1322,7 @@ static Type *sema_find_type_of_element(SemaContext *context, Type *type, Designa
 
 static ArrayIndex sema_analyse_designator_index(SemaContext *context, Expr *index)
 {
-	if (!sema_analyse_expr(context, index))
+	if (!sema_analyse_expr_rvalue(context, index))
 	{
 		return -1;
 	}

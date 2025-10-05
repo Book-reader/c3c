@@ -802,7 +802,8 @@ typedef struct
 {
 	Expr* expr;
 	UnaryOp operator : 8;
-	bool no_wrap : 1;
+	bool no_wrap;
+	bool no_read;
 } ExprUnary;
 
 
@@ -855,6 +856,8 @@ typedef struct
 {
 	ExprId expr;
 	SubscriptIndex index;
+	bool no_check;
+	bool ref;
 } ExprSubscript;
 
 typedef struct
@@ -918,6 +921,8 @@ typedef struct
 {
 	Expr *parent;
 	Expr *child;
+	bool is_lvalue;
+	bool is_ref;
 } ExprUnresolvedAccess;
 
 typedef struct DesignatorElement_
@@ -1170,6 +1175,7 @@ typedef struct
 	Expr *inner;
 	SemaContext *context;
 	SourceSpan inline_at;
+	bool is_ref;
 } ExprOtherContext;
 
 typedef struct
@@ -1960,6 +1966,8 @@ typedef struct
 	GlobalContext context;
 	const char *obj_output;
 	int generic_depth;
+	double exec_time;
+	double script_time;
 } CompilerState;
 
 extern CompilerState compiler;
@@ -2032,6 +2040,13 @@ ARENA_DEF(expr, Expr)
 ARENA_DEF(decl, Decl)
 ARENA_DEF(type_info, TypeInfo)
 
+INLINE Ast *ast_new(AstKind kind, SourceSpan span)
+{
+	Ast *ast = ast_calloc();
+	ast->ast_kind = kind;
+	ast->span = span;
+	return ast;
+}
 
 INLINE TypeInfo *vartype(Decl *var)
 {
@@ -2315,16 +2330,18 @@ Expr *expr_new_const_string(SourceSpan span, const char *string);
 Expr *expr_new_const_null(SourceSpan span, Type *type);
 Expr *expr_new_const_initializer(SourceSpan span, Type *type, ConstInitializer *initializer);
 Expr *expr_new_expr_list_resolved(SourceSpan span, Type *type, Expr **expressions);
+Expr *expr_new_binary(SourceSpan span, Expr *left, Expr *right, BinaryOp op);
+Expr *expr_new_cond(Expr *expr);
 const char *expr_kind_to_string(ExprKind kind);
 bool expr_is_simple(Expr *expr, bool to_float);
 bool expr_is_pure(Expr *expr);
 bool expr_is_runtime_const(Expr *expr);
-Expr *expr_generate_decl(Decl *decl, Expr *assign);
 Expr *expr_new_two(Expr *first, Expr *second);
 void expr_rewrite_two(Expr *original, Expr *first, Expr *second);
 void expr_insert_addr(Expr *original);
 bool sema_expr_rewrite_insert_deref(SemaContext *context, Expr *original);
 Expr *expr_generate_decl(Decl *decl, Expr *assign);
+Expr *expr_generated_local(Expr *assign, Decl **decl_ref);
 Expr *expr_variable(Decl *decl);
 Expr *expr_negate_expr(Expr *expr);
 bool expr_may_addr(Expr *expr);
@@ -2420,7 +2437,7 @@ bool sema_analyse_cond_expr(SemaContext *context, Expr *expr, CondResult *result
 bool sema_analyse_expr_rhs(SemaContext *context, Type *to, Expr *expr, bool allow_optional, bool *no_match_ref,
                            bool as_binary);
 
-bool sema_analyse_expr(SemaContext *context, Expr *expr);
+bool sema_analyse_expr_rvalue(SemaContext *context, Expr *expr);
 bool sema_cast_const(Expr *expr);
 
 bool sema_expr_check_discard(SemaContext *context, Expr *expr);
@@ -2681,7 +2698,7 @@ INLINE bool type_is_pointer_sized(Type *type)
 
 #define DECL_TYPE_KIND_REAL(k_, t_) \
  TypeKind k_ = (t_)->type_kind; \
- if (k_ == TYPE_TYPEDEF) k_ = (t_)->canonical->type_kind;
+ if (k_ == TYPE_ALIAS) k_ = (t_)->canonical->type_kind;
 
 
 INLINE Type *type_add_optional(Type *type, bool make_optional)
@@ -2720,7 +2737,7 @@ INLINE bool type_len_is_inferred(Type *type)
 	{
 		switch (type->type_kind)
 		{
-			case TYPE_TYPEDEF:
+			case TYPE_ALIAS:
 				type = type->canonical;
 				continue;
 			case TYPE_OPTIONAL:
@@ -2728,7 +2745,6 @@ INLINE bool type_len_is_inferred(Type *type)
 				continue;
 			case TYPE_ARRAY:
 			case TYPE_SLICE:
-			case TYPE_FLEXIBLE_ARRAY:
 			case TYPE_VECTOR:
 				type = type->array.base;
 				continue;
@@ -2737,7 +2753,9 @@ INLINE bool type_len_is_inferred(Type *type)
 				return true;
 			case TYPE_POINTER:
 				type = type->pointer;
+				if (type->canonical->type_kind == TYPE_FLEXIBLE_ARRAY) return false;
 				continue;
+			case TYPE_FLEXIBLE_ARRAY:
 			default:
 				return false;
 		}
@@ -2786,7 +2804,7 @@ INLINE bool type_may_implement_interface(Type *type)
 		case TYPE_UNION:
 		case TYPE_ENUM:
 		case TYPE_CONST_ENUM:
-		case TYPE_DISTINCT:
+		case TYPE_TYPEDEF:
 		case TYPE_BITSTRUCT:
 			return true;
 		default:
@@ -2855,7 +2873,7 @@ static inline Type *type_flat_distinct_inline(Type *type);
 static inline bool type_is_pointer_like(Type *type)
 {
 	TypeKind kind = type->type_kind;
-	if (kind == TYPE_DISTINCT)
+	if (kind == TYPE_TYPEDEF)
 	{
 		type = type_flat_distinct_inline(type);
 		kind = type->type_kind;
@@ -2929,10 +2947,10 @@ INLINE bool type_may_negate(Type *type)
 		case ALL_FLOATS:
 		case ALL_INTS:
 			return true;
-		case TYPE_DISTINCT:
+		case TYPE_TYPEDEF:
 			type = type->decl->distinct->type;
 			goto RETRY;
-		case TYPE_TYPEDEF:
+		case TYPE_ALIAS:
 			type = type->canonical;
 			goto RETRY;
 		case TYPE_OPTIONAL:
@@ -3045,7 +3063,7 @@ INLINE Type *type_flatten_for_bitstruct(Type *type)
 {
 	type = type->canonical;
 	RETRY:
-	while (type->type_kind == TYPE_DISTINCT)
+	while (type->type_kind == TYPE_TYPEDEF)
 	{
 		type = type->decl->distinct->type;
 	}
@@ -3104,7 +3122,7 @@ static inline Type *type_base(Type *type)
 		type = type->canonical;
 		switch (type->type_kind)
 		{
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				type = type->decl->distinct->type;
 				break;
 			case TYPE_ENUM:
@@ -3114,7 +3132,7 @@ static inline Type *type_base(Type *type)
 			case TYPE_OPTIONAL:
 				type = type->optional;
 				break;
-			case TYPE_TYPEDEF:
+			case TYPE_ALIAS:
 				UNREACHABLE
 			default:
 				return type;
@@ -3126,7 +3144,7 @@ static inline Type *type_base(Type *type)
 static const bool is_distinct_like[TYPE_LAST + 1] = {
 	[TYPE_ENUM] = true,
 	[TYPE_CONST_ENUM] = true,
-	[TYPE_DISTINCT] = true
+	[TYPE_TYPEDEF] = true
 };
 
 INLINE bool typekind_is_distinct_like(TypeKind kind)
@@ -3147,7 +3165,7 @@ static bool type_has_inline(Type *type)
 static inline Type *type_inline(Type *type)
 {
 	assert(type_is_distinct_like(type));
-	return type->type_kind == TYPE_DISTINCT ? type->decl->distinct->type : type->decl->enums.type_info->type;
+	return type->type_kind == TYPE_TYPEDEF ? type->decl->distinct->type : type->decl->enums.type_info->type;
 }
 
 
@@ -3177,7 +3195,7 @@ static inline Type *type_flatten_and_inline(Type *type)
 			case TYPE_OPTIONAL:
 				type = type->optional;
 				continue;
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				type = type->decl->distinct->type;
 				continue;
 			case TYPE_CONST_ENUM:
@@ -3207,7 +3225,7 @@ static inline Type *type_flat_distinct_enum_inline(Type *type)
 		Decl *decl;
 		switch (type->type_kind)
 		{
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				decl = type->decl;
 				if (!decl->is_substruct) return type;;
 				type = decl->distinct->type;
@@ -3236,15 +3254,15 @@ static inline Type *type_flat_distinct_enum_inline(Type *type)
 INLINE bool type_is_user_defined(Type *type)
 {
 	static const bool user_defined_types[TYPE_LAST + 1] = {
-		[TYPE_ENUM] = true,
+		[TYPE_ENUM]       = true,
 		[TYPE_CONST_ENUM] = true,
-		[TYPE_STRUCT] = true,
-		[TYPE_FUNC_RAW] = true,
-		[TYPE_UNION] = true,
-		[TYPE_DISTINCT] = true,
-		[TYPE_BITSTRUCT] = true,
-		[TYPE_TYPEDEF] = true,
-		[TYPE_INTERFACE] = true,
+		[TYPE_STRUCT]     = true,
+		[TYPE_FUNC_RAW]   = true,
+		[TYPE_UNION]      = true,
+		[TYPE_TYPEDEF]    = true,
+		[TYPE_BITSTRUCT]  = true,
+		[TYPE_ALIAS]      = true,
+		[TYPE_INTERFACE]  = true,
 	};
 	return user_defined_types[type->type_kind];
 }
@@ -3270,7 +3288,7 @@ static inline Type *type_flatten_to_int(Type *type)
 		type = type->canonical;
 		switch (type->type_kind)
 		{
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				type = type->decl->distinct->type;
 				break;
 			case TYPE_OPTIONAL:
@@ -3287,7 +3305,7 @@ static inline Type *type_flatten_to_int(Type *type)
 			case TYPE_VECTOR:
 				ASSERT(type_is_integer(type->array.base));
 				return type;
-			case TYPE_TYPEDEF:
+			case TYPE_ALIAS:
 				UNREACHABLE
 			default:
 				ASSERT(type_is_integer(type));
@@ -3309,13 +3327,13 @@ static inline CanonicalType *type_distinct_inline(Type *type)
 			case TYPE_CONST_ENUM:
 				type = enum_inner_type(type);
 				break;
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				type = type->decl->distinct->type;
 				break;
 			case TYPE_OPTIONAL:
 				type = type->optional;
 				break;
-			case TYPE_TYPEDEF:
+			case TYPE_ALIAS:
 				UNREACHABLE
 			default:
 				return type;
@@ -3332,13 +3350,13 @@ static inline CanonicalType *type_flatten(Type *type)
 			case TYPE_CONST_ENUM:
 				type = enum_inner_type(type);
 				break;
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				type = type->decl->distinct->type;
 				break;
 			case TYPE_OPTIONAL:
 				type = type->optional;
 				break;
-			case TYPE_TYPEDEF:
+			case TYPE_ALIAS:
 				UNREACHABLE
 			default:
 				return type;
@@ -3352,11 +3370,11 @@ static inline Type *type_flatten_no_export(Type *type)
 	{
 		switch (type->type_kind)
 		{
-			case TYPE_TYPEDEF:
+			case TYPE_ALIAS:
 				if (type->decl->is_export) return type;
 				type = type->canonical;
 				break;
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				if (type->decl->is_export) return type;
 				type = type->decl->distinct->type;
 				break;
@@ -3419,10 +3437,30 @@ INLINE bool type_is_func_ptr(Type *fn_type)
 	return fn_type->canonical->type_kind == TYPE_FUNC_PTR;
 }
 
-INLINE bool type_is_inferred(Type *type)
+INLINE bool type_is_infer_type(Type *type)
 {
 	TypeKind kind = type->type_kind;
 	return kind == TYPE_INFERRED_VECTOR || kind == TYPE_INFERRED_ARRAY;
+}
+
+INLINE bool type_is_inferred(Type *type)
+{
+RETRY:;
+	TypeKind kind = type->type_kind;
+	switch (kind)
+	{
+		case TYPE_INFERRED_ARRAY:
+		case TYPE_INFERRED_VECTOR:
+			return true;
+		case TYPE_ARRAY:
+			type = type->array.base->canonical;
+			goto RETRY;
+		case TYPE_POINTER:
+			type = type->pointer->canonical;
+			goto RETRY;
+		default:
+			return false;
+	}
 }
 
 INLINE bool type_is_number_or_bool(Type *type)
@@ -3450,7 +3488,7 @@ static inline Type *type_flat_for_arithmethics(Type *type)
 				type = type->optional;
 				continue;
 			case TYPE_CONST_ENUM:
-			case TYPE_DISTINCT:
+			case TYPE_TYPEDEF:
 				inner = type_inline(type);
 				if (type->decl->is_substruct)
 				{
@@ -3551,7 +3589,7 @@ INLINE bool decl_is_user_defined_type(Decl *decl)
 {
 	DeclKind kind = decl->decl_kind;
 	return (kind == DECL_UNION) | (kind == DECL_STRUCT) | (kind == DECL_BITSTRUCT)
-			| (kind == DECL_ENUM) | (kind == DECL_TYPEDEF) | (kind == DECL_DISTINCT)
+			| (kind == DECL_ENUM) | (kind == DECL_TYPE_ALIAS) | (kind == DECL_TYPEDEF)
 			| (kind == DECL_INTERFACE)
 			;
 }

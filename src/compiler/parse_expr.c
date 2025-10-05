@@ -595,7 +595,7 @@ Expr *parse_ct_expression_list(ParseContext *c, bool allow_decl)
 		}
 		else
 		{
-			ASSIGN_EXPR_OR_RET(expr, parse_expr(c), poisoned_expr);
+			ASSIGN_EXPR_OR_RET(expr, parse_decl_or_expr(c), poisoned_expr);
 		}
 		vec_add(expr_list->expression_list, expr);
 		if (!try_consume(c, TOKEN_COMMA)) break;
@@ -918,10 +918,7 @@ static Expr *parse_orelse(ParseContext *c, Expr *left_side, SourceSpan lhs_start
 	// Assignment operators have precedence right -> left.
 	ASSIGN_EXPR_OR_RET(right_side, parse_precedence(c, PREC_TERNARY), poisoned_expr);
 
-	Expr *expr = expr_new(EXPR_BINARY, lhs_start);
-	expr->binary_expr.operator = BINARYOP_ELSE;
-	expr->binary_expr.left = exprid(left_side);
-	expr->binary_expr.right = exprid(right_side);
+	Expr *expr = expr_new_binary(lhs_start, left_side, right_side, BINARYOP_ELSE);
 
 	RANGE_EXTEND_PREV(expr);
 	return expr;
@@ -947,10 +944,7 @@ static Expr *parse_binary(ParseContext *c, Expr *left_side, SourceSpan start)
 		ASSIGN_EXPR_OR_RET(right_side, parse_precedence(c, rules[operator_type].precedence + 1), poisoned_expr);
 	}
 
-	Expr *expr = expr_new(EXPR_BINARY, start);
-	expr->binary_expr.operator = binaryop_from_token(operator_type);
-	expr->binary_expr.left = exprid(left_side);
-	expr->binary_expr.right = exprid(right_side);
+	Expr *expr = expr_new_binary(start, left_side, right_side, binaryop_from_token(operator_type));
 
 	RANGE_EXTEND_PREV(expr);
 	return expr;
@@ -2179,7 +2173,8 @@ ParseRule rules[TOKEN_EOF + 1] = {
 		[TOKEN_REAL] = { parse_double, NULL, PREC_NONE },
 		[TOKEN_OR] = { NULL, parse_binary, PREC_OR },
 		[TOKEN_CT_OR] = { NULL, parse_binary, PREC_OR },
-		[TOKEN_CT_CONCAT] = { NULL, parse_binary, PREC_MULTIPLICATIVE },
+		[TOKEN_CT_CONCAT] = { NULL, parse_binary, PREC_ADDITIVE },
+		[TOKEN_CT_CONCAT_ASSIGN] = { NULL, parse_binary, PREC_ASSIGNMENT },
 		[TOKEN_AND] = { parse_unary_expr, parse_binary, PREC_AND },
 		[TOKEN_CT_AND] = { parse_unary_expr, parse_binary, PREC_AND },
 		[TOKEN_EQ] = { NULL, parse_binary, PREC_ASSIGNMENT },

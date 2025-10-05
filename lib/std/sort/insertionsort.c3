@@ -2,11 +2,12 @@ module std::sort;
 import std::sort::is;
 
 <*
-Sort list using the quick sort algorithm.
+ Sort list using the quick sort algorithm.
+
  @require @is_sortable(list) : "The list must be indexable and support .len or .len()"
  @require @is_valid_cmp_fn(cmp, list, context) : "Expected a comparison function which compares values"
 *>
-macro insertionsort(list, cmp = EMPTY_MACRO_SLOT, context = EMPTY_MACRO_SLOT) @builtin @safemacro
+macro void insertionsort(list, cmp = EMPTY_MACRO_SLOT, context = EMPTY_MACRO_SLOT) @builtin @safemacro
 {
 	$if $kindof(list) == POINTER &&& ($kindof(*list) == ARRAY || $kindof(*list) == VECTOR):
 		$typeof((*list)[0])[] list2 = list;

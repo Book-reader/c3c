@@ -90,16 +90,17 @@ void sema_analyze_stage(Module *module, AnalysisStage stage);
 void sema_trace_liveness(void);
 
 Expr *sema_expr_resolve_access_child(SemaContext *context, Expr *child, bool *missing);
-bool sema_analyse_expr_address(SemaContext *context, Expr *expr);
 
 bool sema_analyse_expr_lvalue(SemaContext *context, Expr *expr, bool *failed_ref);
 
-bool sema_analyse_expr_value(SemaContext *context, Expr *expr);
+bool sema_analyse_expr(SemaContext *context, Expr *expr);
 Expr *expr_access_inline_member(Expr *parent, Decl *parent_decl);
+void expr_set_to_ref(Expr *expr);
 bool sema_analyse_ct_expr(SemaContext *context, Expr *expr);
 Decl *sema_find_typed_operator(SemaContext *context, OperatorOverload operator_overload, SourceSpan span, Expr *lhs, Expr *rhs, bool *reverse);
 OverloadMatch sema_find_typed_operator_type(SemaContext *context, OperatorOverload operator_overload, OverloadType overload_type, Type *lhs_type, Type *rhs_type, Expr *rhs, Decl **candidate_ref, OverloadMatch last_match, Decl **ambiguous_ref);
 BoolErr sema_type_has_equality_overload(SemaContext *context, Type *type);
+BoolErr sema_type_can_check_equality_with_overload(SemaContext *context, Type *type);
 Decl *sema_find_untyped_operator(Type *type, OperatorOverload operator_overload, Decl *skipped);
 bool sema_insert_method_call(SemaContext *context, Expr *method_call, Decl *method_decl, Expr *parent, Expr **arguments, bool reverse_overload);
 bool sema_expr_analyse_builtin_call(SemaContext *context, Expr *expr);
@@ -135,6 +136,24 @@ INLINE void sema_display_deprecated_warning_on_use(SemaContext *context, Decl *d
 bool sema_expr_analyse_ct_concat(SemaContext *context, Expr *concat_expr, Expr *left, Expr *right, bool *failed_ref);
 bool sema_analyse_const_enum_constant_val(SemaContext *context, Decl *decl);
 bool sema_analyse_attributes(SemaContext *context, Decl *decl, Attr **attrs, AttributeDomain domain, bool *erase_decl);
+
+INLINE bool sema_analyse_stmt_chain(SemaContext *context, Ast *statement)
+{
+	if (!ast_ok(statement)) return false;
+	AstId current = astid(statement);
+	Ast *ast = NULL;
+	bool all_ok = true;
+	while (current)
+	{
+		ast = ast_next(&current);
+		if (!sema_analyse_statement(context, ast))
+		{
+			ast_poison(ast);
+			all_ok = false;
+		}
+	}
+	return all_ok;
+}
 
 INLINE bool sema_analyse_func_macro(SemaContext *context, Decl *decl, AttributeDomain domain, bool *erase_decl)
 {
@@ -247,15 +266,17 @@ static inline StorageType sema_resolve_storage_type(SemaContext *context, Type *
 		case TYPE_OPTIONAL:
 			type = type->optional;
 			goto RETRY;
-		case TYPE_TYPEDEF:
+		case TYPE_ALIAS:
 			if (!sema_analyse_decl(context, type->decl)) return false;
 			type = type->canonical;
 			goto RETRY;
-		case TYPE_DISTINCT:
+		case TYPE_TYPEDEF:
 			is_distinct = true;
 			if (!sema_analyse_decl(context, type->decl)) return false;
 			type = type->decl->distinct->type;
 			goto RETRY;
+		case TYPE_FLEXIBLE_ARRAY:
+			return STORAGE_UNKNOWN;
 		default:
 			return STORAGE_NORMAL;
 	}

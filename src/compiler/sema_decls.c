@@ -41,10 +41,10 @@ static bool sema_analyse_attributes_for_var(SemaContext *context, Decl *decl, bo
 static bool sema_check_section(SemaContext *context, Attr *attr);
 static inline bool sema_analyse_attribute_decl(SemaContext *context, SemaContext *c, Decl *decl, bool *erase_decl);
 
-static inline bool sema_analyse_typedef(SemaContext *context, Decl *decl, bool *erase_decl);
+static inline bool sema_analyse_type_alias(SemaContext *context, Decl *decl, bool *erase_decl);
 static bool sema_analyse_variable_type(SemaContext *context, Type *type, SourceSpan span);
 static inline bool sema_analyse_alias(SemaContext *context, Decl *decl, bool *erase_decl);
-static inline bool sema_analyse_distinct(SemaContext *context, Decl *decl, bool *erase_decl);
+static inline bool sema_analyse_typedef(SemaContext *context, Decl *decl, bool *erase_decl);
 
 static CompilationUnit *unit_copy(Module *module, CompilationUnit *unit);
 
@@ -408,9 +408,9 @@ RETRY:;
 	type = type_flatten(type);
 	switch (type->type_kind)
 	{
-		case TYPE_DISTINCT:
-		case TYPE_POISONED:
 		case TYPE_TYPEDEF:
+		case TYPE_POISONED:
+		case TYPE_ALIAS:
 		case TYPE_UNTYPED_LIST:
 		case TYPE_OPTIONAL:
 		case TYPE_WILDCARD:
@@ -800,7 +800,7 @@ static inline bool sema_analyse_bitstruct_member(SemaContext *context, Decl *par
 	if (member->var.bit_is_expr)
 	{
 		Expr *start = member->var.start;
-		if (!sema_analyse_expr(context, start)) return false;
+		if (!sema_analyse_expr_rvalue(context, start)) return false;
 
 		// Check for negative, non integer or non const values.
 		if (!sema_cast_const(start) || !type_is_integer(start->type) || int_is_neg(start->const_expr.ixx))
@@ -823,7 +823,7 @@ static inline bool sema_analyse_bitstruct_member(SemaContext *context, Decl *par
 		if (end)
 		{
 			// Analyse the end
-			if (!sema_analyse_expr(context, end)) return false;
+			if (!sema_analyse_expr_rvalue(context, end)) return false;
 			if (!sema_cast_const(end) || !type_is_integer(end->type) || int_is_neg(end->const_expr.ixx))
 			{
 				SEMA_ERROR(end, "This must be a constant non-negative integer value.");
@@ -1022,7 +1022,7 @@ RETRY:
 		case TYPE_STRUCT:
 		case TYPE_UNION:
 		case TYPE_BITSTRUCT:
-		case TYPE_DISTINCT:
+		case TYPE_TYPEDEF:
 		case TYPE_VECTOR:
 		case TYPE_INFERRED_VECTOR:
 		case TYPE_UNTYPED_LIST:
@@ -1030,7 +1030,7 @@ RETRY:
 		case TYPE_TYPEINFO:
 		case TYPE_MEMBER:
 			return true;
-		case TYPE_TYPEDEF:
+		case TYPE_ALIAS:
 			type = type->canonical;
 			goto RETRY;
 		case TYPE_POINTER:
@@ -1460,7 +1460,7 @@ static inline bool sema_analyse_fntype(SemaContext *context, Decl *decl, bool *e
 	return sema_analyse_function_signature(context, decl, NULL, sig->abi, sig);
 }
 
-static inline bool sema_analyse_typedef(SemaContext *context, Decl *decl, bool *erase_decl)
+static inline bool sema_analyse_type_alias(SemaContext *context, Decl *decl, bool *erase_decl)
 {
 	if (!sema_analyse_attributes(context, decl, decl->attributes, ATTR_ALIAS, erase_decl)) return decl_poison(decl);
 	if (*erase_decl) return true;
@@ -1478,6 +1478,24 @@ static inline bool sema_analyse_typedef(SemaContext *context, Decl *decl, bool *
 	TypeInfo *info = decl->type_alias_decl.type_info;
 	info->in_def = true;
 	if (!sema_resolve_type_info(context, info, RESOLVE_TYPE_DEFAULT)) return false;
+	if (type_is_optional(info->type))
+	{
+		RETURN_SEMA_ERROR(info, "You cannot create an alias for an optional type like %s.", type_quoted_error_string(info->type));
+	}
+	switch (sema_resolve_storage_type(context, info->type))
+	{
+		case STORAGE_ERROR:
+			return false;
+		case STORAGE_NORMAL:
+		case STORAGE_UNKNOWN:
+		case STORAGE_VOID:
+			break;
+		case STORAGE_WILDCARD:
+			RETURN_SEMA_ERROR(info, "You cannot create an alias for the wildcard type.");
+		case STORAGE_COMPILE_TIME:
+			RETURN_SEMA_ERROR(info, "You cannot create an alias for %s as it is a compile time type.",
+							  type_invalid_storage_type_name(info->type));
+	}
 	decl->type->canonical = info->type->canonical;
 	// Do we need anything else?
 	return true;
@@ -1486,10 +1504,10 @@ static inline bool sema_analyse_typedef(SemaContext *context, Decl *decl, bool *
 /**
  * Analyse a distinct type.
  */
-static inline bool sema_analyse_distinct(SemaContext *context, Decl *decl, bool *erase_decl)
+static inline bool sema_analyse_typedef(SemaContext *context, Decl *decl, bool *erase_decl)
 {
 	// Check the attributes on the distinct type.
-	if (!sema_analyse_attributes(context, decl, decl->attributes, ATTR_DISTINCT, erase_decl)) return false;
+	if (!sema_analyse_attributes(context, decl, decl->attributes, ATTR_TYPEDEF, erase_decl)) return false;
 
 	// Erase it?
 	if (*erase_decl) return true;
@@ -1504,6 +1522,20 @@ static inline bool sema_analyse_distinct(SemaContext *context, Decl *decl, bool 
 
 	// Optional isn't allowed of course.
 	if (type_is_optional(info->type)) RETURN_SEMA_ERROR(decl, "You cannot create a distinct type from an optional.");
+	switch (sema_resolve_storage_type(context, info->type))
+	{
+		case STORAGE_ERROR:
+			return false;
+		case STORAGE_NORMAL:
+		case STORAGE_UNKNOWN:
+		case STORAGE_VOID:
+			break;
+		case STORAGE_WILDCARD:
+			RETURN_SEMA_ERROR(info, "You cannot create a distinct type from the wildcard type.");
+		case STORAGE_COMPILE_TIME:
+			RETURN_SEMA_ERROR(info, "You cannot create a distinct type for %s as it is a compile time type.",
+							  type_invalid_storage_type_name(info->type));
+	}
 
 	// Distinct types drop the canonical part.
 	info->type = info->type->canonical;
@@ -2612,10 +2644,10 @@ static inline Decl *sema_find_interface_for_method(SemaContext *context, Canonic
 	{
 		case TYPE_STRUCT:
 		case TYPE_UNION:
-		case TYPE_DISTINCT:
+		case TYPE_TYPEDEF:
 		case TYPE_ENUM:
 			break;
-		case TYPE_TYPEDEF:
+		case TYPE_ALIAS:
 			UNREACHABLE
 		default:
 			return NULL;
@@ -2832,7 +2864,7 @@ static inline bool sema_analyse_method(SemaContext *context, Decl *decl)
 		case TYPE_FUNC_RAW:
 		case TYPE_UNTYPED_LIST:
 		case TYPE_BITSTRUCT:
-		case TYPE_DISTINCT:
+		case TYPE_TYPEDEF:
 			break;
 		case TYPE_TYPEID:
 			if (type_property_by_name(kw) != TYPE_PROPERTY_NONE)
@@ -2840,7 +2872,7 @@ static inline bool sema_analyse_method(SemaContext *context, Decl *decl)
 				RETURN_SEMA_ERROR(decl, "\"%s\" is not a valid method name for a typeid as this is the name of a type property.", decl->name);
 			}
 			break;
-		case TYPE_TYPEDEF:
+		case TYPE_ALIAS:
 		case TYPE_OPTIONAL:
 		case TYPE_WILDCARD:
 		case TYPE_TYPEINFO:
@@ -2931,8 +2963,8 @@ static const char *attribute_domain_to_string(AttributeDomain domain)
 			return "alias";
 		case ATTR_CALL:
 			return "call";
-		case ATTR_DISTINCT:
-			return "distinct";
+		case ATTR_TYPEDEF:
+			return "typedef";
 		case ATTR_INTERFACE_METHOD:
 			return "interface method";
 		case ATTR_FNTYPE:
@@ -3056,7 +3088,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			[ATTRIBUTE_SAFEMACRO] = ATTR_MACRO,
 			[ATTRIBUTE_SAFEINFER] = ATTR_GLOBAL | ATTR_LOCAL,
 			[ATTRIBUTE_SECTION] = ATTR_FUNC | ATTR_CONST | ATTR_GLOBAL,
-			[ATTRIBUTE_STRUCTLIKE] = ATTR_DISTINCT,
+			[ATTRIBUTE_STRUCTLIKE] = ATTR_TYPEDEF,
 			[ATTRIBUTE_TAG] = ATTR_BITSTRUCT_MEMBER | ATTR_MEMBER | USER_DEFINED_TYPES | CALLABLE_TYPE,
 			[ATTRIBUTE_TEST] = ATTR_FUNC,
 			[ATTRIBUTE_UNUSED] = (AttributeDomain)~(ATTR_CALL),
@@ -3098,7 +3130,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			attr_data->deprecated = "";
 			if (expr)
 			{
-				if (!sema_analyse_expr(context, expr)) return false;
+				if (!sema_analyse_expr_rvalue(context, expr)) return false;
 				if (!expr_is_const_string(expr))
 				{
 					RETURN_SEMA_ERROR(expr, "Expected a constant string value as argument.");
@@ -3122,7 +3154,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			break;
 		case ATTRIBUTE_CALLCONV:
 			if (!expr) RETURN_SEMA_ERROR(decl, "Expected a string argument.");
-			if (expr && !sema_analyse_expr(context, expr)) return false;
+			if (expr && !sema_analyse_expr_rvalue(context, expr)) return false;
 			if (!expr_is_const_string(expr)) RETURN_SEMA_ERROR(expr, "Expected a constant string value as argument.");
 			if (!update_call_abi_from_string(context, decl, expr)) return false;
 			return true;
@@ -3135,9 +3167,9 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			if (args != 2) RETURN_SEMA_ERROR(attr, "'@tag' requires two arguments.");
 			Expr *string = attr->exprs[0];
 			Expr *val = attr->exprs[1];
-			if (!sema_analyse_expr(context, string)) return false;
+			if (!sema_analyse_expr_rvalue(context, string)) return false;
 			if (!sema_cast_const(string) || !expr_is_const_string(string)) RETURN_SEMA_ERROR(string, "Expected a constant string here, usage is: '@tag(name, value)'.");
-			if (!sema_analyse_expr(context, val)) return false;
+			if (!sema_analyse_expr_rvalue(context, val)) return false;
 			if (!sema_cast_const(val)) RETURN_SEMA_ERROR(val, "Expected a constant value here, usage is: '@tag(name, value)'.");
 			const char *name = string->const_expr.bytes.ptr;
 			FOREACH_IDX(i, Attr *, tag, attr_data->tags)
@@ -3214,7 +3246,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			{
 				RETURN_SEMA_ERROR(attr, "'align' requires an power-of-2 argument, e.g. align(8).");
 			}
-			if (!sema_analyse_expr(context, expr)) return false;
+			if (!sema_analyse_expr_rvalue(context, expr)) return false;
 			if (!expr_is_const_int(expr))
 			{
 				RETURN_SEMA_ERROR(expr, "Expected a constant integer value as argument.");
@@ -3256,13 +3288,13 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 				}
 				Expr *module = expr;
 				expr = attr->exprs[1];
-				if (!sema_analyse_expr(context, module)) return false;
+				if (!sema_analyse_expr_rvalue(context, module)) return false;
 				if (!expr_is_const_string(module))
 				{
 					RETURN_SEMA_ERROR(module, "Expected a constant string value as argument.");
 				}
 				attr_data->wasm_module = module->const_expr.bytes.ptr;
-				if (!sema_analyse_expr(context, expr)) return false;
+				if (!sema_analyse_expr_rvalue(context, expr)) return false;
 				if (!expr_is_const_string(expr))
 				{
 					RETURN_SEMA_ERROR(expr, "Expected a constant string value as argument.");
@@ -3278,7 +3310,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			}
 			if (expr)
 			{
-				if (!sema_analyse_expr(context, expr)) return false;
+				if (!sema_analyse_expr_rvalue(context, expr)) return false;
 				if (!expr_is_const_string(expr))
 				{
 					RETURN_SEMA_ERROR(expr, "Expected a constant string value as argument.");
@@ -3300,7 +3332,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			return true;
 		case ATTRIBUTE_IF:
 			if (!expr) RETURN_SEMA_ERROR(attr, "'@if' requires a boolean argument.");
-			if (!sema_analyse_expr(context, expr)) return false;
+			if (!sema_analyse_expr_rvalue(context, expr)) return false;
 			if (!cast_explicit_silent(context, expr, type_bool) || !sema_cast_const(expr))
 			{
 				RETURN_SEMA_ERROR(expr, "Expected a boolean compile time constant value.");
@@ -3313,7 +3345,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			goto PARSE;
 		case ATTRIBUTE_FORMAT:
 			if (args != 1) RETURN_SEMA_ERROR(attr, "'@format' expects the index of the format string as the argument, e.g. '@format(1)'.");
-			if (!sema_analyse_expr(context, expr)) return false;
+			if (!sema_analyse_expr_rvalue(context, expr)) return false;
 			if (!type_is_integer(expr->type) || !sema_cast_const(expr))
 			{
 				RETURN_SEMA_ERROR(expr, "Expected an integer compile time constant value.");
@@ -3344,7 +3376,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 		case ATTRIBUTE_LINK:
 			if (args < 1) RETURN_SEMA_ERROR(attr, "'@link' requires at least one argument.");
 			Expr *cond = args > 1 ? attr->exprs[0] : NULL;
-			if (cond && !sema_analyse_expr(context, cond)) return false;
+			if (cond && !sema_analyse_expr_rvalue(context, cond)) return false;
 			int start = 0;
 			bool has_link = true;
 			if (cond && expr_is_const_bool(cond))
@@ -3355,7 +3387,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			for (unsigned i = start; i < args; i++)
 			{
 				Expr *string = attr->exprs[i];
-				if (!sema_analyse_expr(context, string)) return false;
+				if (!sema_analyse_expr_rvalue(context, string)) return false;
 				if (!expr_is_const_string(string)) RETURN_SEMA_ERROR(string, "Expected a constant string here, usage is: '@link(cond1, link1, link2, ...)'.");
 				if (has_link) vec_add(attr_data->links, string->const_expr.bytes.ptr);
 			}
@@ -3365,7 +3397,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 		PARSE:;
 			if (expr)
 			{
-				if (!sema_analyse_expr(context, expr)) return false;
+				if (!sema_analyse_expr_rvalue(context, expr)) return false;
 				if (!expr_is_const_int(expr))
 				{
 					RETURN_SEMA_ERROR(attr, "Expected an integer value.");
@@ -3391,7 +3423,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			{
 				RETURN_SEMA_ERROR(attr, "'%s' requires a string argument, e.g. %s(\"foo\").", attr->name, attr->name);
 			}
-			if (!sema_analyse_expr(context, expr)) return false;
+			if (!sema_analyse_expr_rvalue(context, expr)) return false;
 			if (!expr_is_const_string(expr))
 			{
 				RETURN_SEMA_ERROR(expr, "Expected a constant string value as argument.");
@@ -3456,7 +3488,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 			{
 				RETURN_SEMA_ERROR(attr, "'%s' requires a string argument, e.g. %s(\"address\").", attr->name, attr->name);
 			}
-			if (!sema_analyse_expr(context, expr)) return false;
+			if (!sema_analyse_expr_rvalue(context, expr)) return false;
 			if (!expr_is_const_string(expr))
 			{
 				RETURN_SEMA_ERROR(expr, "Expected a constant string value as argument.");
@@ -3482,7 +3514,7 @@ static bool sema_analyse_attribute(SemaContext *context, ResolvedAttrData *attr_
 		case ATTRIBUTE_WEAK:
 			if (domain == ATTR_ALIAS)
 			{
-				if (decl->decl_kind != DECL_TYPEDEF) RETURN_SEMA_ERROR(attr, "'@weak' can only be used on type aliases.");
+				if (decl->decl_kind != DECL_TYPE_ALIAS) RETURN_SEMA_ERROR(attr, "'@weak' can only be used on type aliases.");
 				if (!decl->type_alias_decl.is_redef)
 				{
 					RETURN_SEMA_ERROR(attr, "'@weak' is only allowed on type aliases with the same name, eg 'def Foo = bar::def::Foo @weak'.");
@@ -4489,7 +4521,7 @@ bool sema_analyse_var_decl_ct(SemaContext *context, Decl *decl, bool *check_fail
 			if ((init = decl->var.init_expr))
 			{
 				// Try to fold any constant into an lvalue.
-				if (!sema_analyse_expr_value(context, init)) goto FAIL;
+				if (!sema_analyse_expr(context, init)) goto FAIL;
 
 				if (init->expr_kind == EXPR_TYPEINFO)
 				{
@@ -4552,7 +4584,7 @@ bool sema_analyse_var_decl_ct(SemaContext *context, Decl *decl, bool *check_fail
 					SEMA_ERROR(init, "You can't assign a type to a regular compile time variable like '%s', but it would be allowed if the variable was a compile time type variable. Such a variable needs to have a type-like name, e.g. '$MyType'.", decl->name);
 					goto FAIL;
 				}
-				if (!sema_analyse_expr(context, init)) goto FAIL;
+				if (!sema_analyse_expr_rvalue(context, init)) goto FAIL;
 				// Check it is constant.
 				if (!expr_is_runtime_const(init))
 				{
@@ -4676,7 +4708,7 @@ bool sema_analyse_var_decl(SemaContext *context, Decl *decl, bool local, bool *c
 			SEMA_ERROR(decl, "Defining a variable using 'var %s = ...' is only allowed inside a macro, or when defining a lambda. You can override this by adding the attribute '@safeinfer' to the declaration.", decl->name);
 			return decl_poison(decl);
 		}
-		if (!sema_analyse_expr(context, init_expr)) return decl_poison(decl);
+		if (!sema_analyse_expr_rvalue(context, init_expr)) return decl_poison(decl);
 		if (check_defined || global_level_var || !type_is_abi_aggregate(init_expr->type)) sema_cast_const(init_expr);
 		if (global_level_var && !expr_is_runtime_const(init_expr))
 		{
@@ -4883,7 +4915,7 @@ static Module *module_instantiate_generic(SemaContext *context, Module *module, 
 		if (is_value) RETURN_NULL_SEMA_ERROR(param, "Expected a value, not a type.");
 		TypeInfo *type_info = param->type_expr;
 		if (!sema_resolve_type_info(context, type_info, RESOLVE_TYPE_DEFAULT)) return NULL;
-		Decl *decl = decl_new_with_type(param_name, params[i]->span, DECL_TYPEDEF);
+		Decl *decl = decl_new_with_type(param_name, params[i]->span, DECL_TYPE_ALIAS);
 		decl->resolve_status = RESOLVE_DONE;
 		ASSERT(type_info->resolve_status == RESOLVE_DONE);
 		decl->type_alias_decl.type_info = type_info;
@@ -4971,7 +5003,7 @@ static bool sema_generate_parameterized_name_to_scratch(SemaContext *context, Mo
 		{
 			if (!sema_analyse_ct_expr(context, param)) return false;
 			Type *type = param->type->canonical;
-			if (type->type_kind == TYPE_DISTINCT) type = type_flatten(type);
+			if (type->type_kind == TYPE_TYPEDEF) type = type_flatten(type);
 
 			bool is_enum_or_fault = type_kind_is_enum_or_fault(type->type_kind);
 			if (!type_is_integer_or_bool_kind(type) && !is_enum_or_fault)
@@ -5005,7 +5037,7 @@ static bool sema_generate_parameterized_name_to_scratch(SemaContext *context, Mo
 		else
 		{
 			Type *type = param->type->canonical;
-			if (type->type_kind == TYPE_DISTINCT)
+			if (type->type_kind == TYPE_TYPEDEF)
 			{
 				mangle_type_param(type, mangled);
 				scratch_buffer_append(mangled ? "$" : ", ");
@@ -5175,6 +5207,7 @@ Decl *sema_analyse_parameterized_identifier(SemaContext *c, Path *decl_path, con
 		if (stage > ANALYSIS_POST_REGISTER)
 		{
 			sema_analyze_stage(instantiated_module, stage);
+			if (compiler.context.errors_found) return poisoned_decl;
 		}
 	}
 
@@ -5223,7 +5256,7 @@ static inline bool sema_analyse_alias(SemaContext *context, Decl *decl, bool *er
 	if (*erase_decl) return true;
 
 	Expr *expr = decl->define_decl.alias_expr;
-	if (!sema_analyse_expr_value(context, expr)) return false;
+	if (!sema_analyse_expr(context, expr)) return false;
 	if (expr->expr_kind == EXPR_TYPEINFO)
 	{
 		RETURN_SEMA_ERROR(decl, "To alias a type, the alias name must start with uppercase and contain at least one lowercase letter.");
@@ -5297,10 +5330,10 @@ RETRY:
 		case TYPE_FUNC_PTR:
 			type = type->pointer;
 			goto RETRY;
-		case TYPE_TYPEDEF:
+		case TYPE_ALIAS:
 			type = type->canonical;
 			goto RETRY;
-		case TYPE_DISTINCT:
+		case TYPE_TYPEDEF:
 			if (!sema_analyse_decl(context, type->decl)) return false;
 			type = type->decl->distinct->type;
 			goto RETRY;
@@ -5382,11 +5415,11 @@ bool sema_analyse_decl(SemaContext *context, Decl *decl)
 		case DECL_ATTRIBUTE:
 			if (!sema_analyse_attribute_decl(context, context, decl, &erase_decl)) goto FAILED;
 			break;
-		case DECL_DISTINCT:
-			if (!sema_analyse_distinct(context, decl, &erase_decl)) goto FAILED;
-			break;
 		case DECL_TYPEDEF:
 			if (!sema_analyse_typedef(context, decl, &erase_decl)) goto FAILED;
+			break;
+		case DECL_TYPE_ALIAS:
+			if (!sema_analyse_type_alias(context, decl, &erase_decl)) goto FAILED;
 			break;
 		case DECL_ENUM:
 			if (!sema_analyse_enum(context, decl, &erase_decl)) goto FAILED;

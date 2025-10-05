@@ -113,7 +113,7 @@ static inline bool sema_analyse_assert_stmt(SemaContext *context, Ast *statement
 		if (!expr_is_const_string(message_expr)) RETURN_SEMA_ERROR(message_expr, "Expected a constant string as the error message.");
 		FOREACH(Expr *, e, statement->assert_stmt.args)
 		{
-			if (!sema_analyse_expr(context, e)) return false;
+			if (!sema_analyse_expr_rvalue(context, e)) return false;
 			if (IS_OPTIONAL(e)) RETURN_SEMA_ERROR(e, "Optionals cannot be used as assert arguments, use '?""?', '!' or '!!' to fix this.");
 			switch (sema_resolve_storage_type(context, e->type))
 			{
@@ -499,6 +499,7 @@ static inline bool sema_check_return_matches_opt_returns(SemaContext *context, E
 
 static bool sema_analyse_macro_constant_ensures(SemaContext *context, Expr *ret_expr)
 {
+	if (!context->current_macro) return true;
 	ASSERT(context->current_macro);
 	// This is a per return check, so we don't do it if the return expression is missing,
 	// or if it is optional, or – obviously - if there are no '@ensure'.
@@ -573,7 +574,7 @@ static inline bool sema_analyse_block_exit_stmt(SemaContext *context, Ast *state
 		}
 		else
 		{
-			if (!sema_analyse_expr(context, ret_expr)) return false;
+			if (!sema_analyse_expr_rvalue(context, ret_expr)) return false;
 		}
 		if (!sema_check_return_matches_opt_returns(context, ret_expr)) return false;
 		if (ret_expr->expr_kind == EXPR_CALL && ret_expr->call_expr.no_return)
@@ -867,7 +868,7 @@ static inline bool sema_analyse_try_unwrap(SemaContext *context, Expr *expr)
 	// Case A. Unwrapping a single variable.
 	if (!optional)
 	{
-		if (!sema_analyse_expr(context, ident)) return false;
+		if (!sema_analyse_expr_rvalue(context, ident)) return false;
 		// The `try foo()` case.
 		if (ident->expr_kind != EXPR_IDENTIFIER)
 		{
@@ -932,7 +933,7 @@ static inline bool sema_analyse_try_unwrap(SemaContext *context, Expr *expr)
 	}
 
 	// 3b. Evaluate the expression
-	if (!sema_analyse_expr(context, optional)) return false;
+	if (!sema_analyse_expr_rvalue(context, optional)) return false;
 
 	if (!IS_OPTIONAL(optional))
 	{
@@ -1019,7 +1020,7 @@ RESOLVE_EXPRS:;
 	Expr **exprs = expr->unresolved_catch_expr.exprs;
 	FOREACH(Expr *, fail, exprs)
 	{
-		if (!sema_analyse_expr(context, fail)) return false;
+		if (!sema_analyse_expr_rvalue(context, fail)) return false;
 		if (!type_is_optional(fail->type))
 		{
 			RETURN_SEMA_ERROR(fail, "This expression is not optional, did you add it by mistake?");
@@ -1075,7 +1076,7 @@ static inline bool sema_analyse_last_cond(SemaContext *context, Expr *expr, Cond
 		default:
 			break;
 	}
-	return sema_analyse_expr(context, expr);
+	return sema_analyse_expr_rvalue(context, expr);
 }
 /**
  * An decl-expr-list is a list of a mixture of declarations and expressions.
@@ -1102,7 +1103,7 @@ static inline bool sema_analyse_cond_list(SemaContext *context, Expr *expr, Cond
 	// 2. Walk through each of our declarations / expressions as if they were regular expressions.
 	for (unsigned i = 0; i < entries - 1; i++)
 	{
-		if (!sema_analyse_expr(context, dexprs[i])) return false;
+		if (!sema_analyse_expr_rvalue(context, dexprs[i])) return false;
 	}
 
 	if (!sema_analyse_last_cond(context, dexprs[entries - 1], cond_type, result)) return false;
@@ -1207,7 +1208,7 @@ static inline bool sema_analyse_cond(SemaContext *context, Expr *expr, CondType 
 static inline bool sema_analyse_ct_type_assign_stmt(SemaContext *context, Ast *statement)
 {
 	Expr *right = statement->ct_type_assign_stmt.type_expr;
-	if (!sema_analyse_expr_value(context, right)) return false;
+	if (!sema_analyse_expr(context, right)) return false;
 	if (right->expr_kind == EXPR_TYPEINFO)
 	{
 		expr_rewrite_const_typeid(right, right->type_expr->type);
@@ -1261,7 +1262,7 @@ static inline bool sema_analyse_declare_stmt(SemaContext *context, Ast *statemen
 static inline bool sema_analyse_expr_stmt(SemaContext *context, Ast *statement)
 {
 	Expr *expr = statement->expr_stmt;
-	if (!sema_analyse_expr(context, expr)) return false;
+	if (!sema_analyse_expr_rvalue(context, expr)) return false;
 	if (!sema_expr_check_discard(context, expr)) return false;
 	switch (expr->expr_kind)
 	{
@@ -1406,7 +1407,7 @@ static inline bool sema_analyse_for_stmt(SemaContext *context, Ast *statement)
 
 		if (statement->for_stmt.init)
 		{
-			success = sema_analyse_expr(context, exprptr(statement->for_stmt.init));
+			success = sema_analyse_expr_rvalue(context, exprptr(statement->for_stmt.init));
 		}
 
 		// Conditional scope start
@@ -1453,7 +1454,7 @@ static inline bool sema_analyse_for_stmt(SemaContext *context, Ast *statement)
 		{
 			// Incr scope start
 			SCOPE_START
-				success = sema_analyse_expr(context, exprptr(statement->for_stmt.incr));
+				success = sema_analyse_expr_rvalue(context, exprptr(statement->for_stmt.incr));
 				// Incr scope end
 			SCOPE_END;
 		}
@@ -1508,7 +1509,7 @@ static inline bool sema_analyse_foreach_stmt(SemaContext *context, Ast *statemen
 		}
 		else
 		{
-			if (!sema_analyse_expr(context, enumerator)) return SCOPE_POP_ERROR();
+			if (!sema_analyse_expr_rvalue(context, enumerator)) return SCOPE_POP_ERROR();
 		}
 		// And pop the cond scope.
 	SCOPE_END;
@@ -1562,7 +1563,7 @@ static inline bool sema_analyse_foreach_stmt(SemaContext *context, Ast *statemen
 
 	// However, if we have something distinct, that flattens to a pointer, we should never take the
 	// the underlying pointee type.
-	if (canonical->type_kind == TYPE_DISTINCT && type_flatten(canonical)->type_kind == TYPE_POINTER)
+	if (canonical->type_kind == TYPE_TYPEDEF && type_flatten(canonical)->type_kind == TYPE_POINTER)
 	{
 		value_type = NULL;
 	}
@@ -1577,7 +1578,7 @@ static inline bool sema_analyse_foreach_stmt(SemaContext *context, Ast *statemen
 	bool need_deref = false;
 	// Now we lower the foreach...
 	// If we can't find a value, or this is distinct, then we assume there is an overload.
-	if (!value_type || canonical->type_kind == TYPE_DISTINCT)
+	if (!value_type || canonical->type_kind == TYPE_TYPEDEF)
 	{
 		// Get the overload for .len
 		len = sema_find_untyped_operator(enumerator->type, OVERLOAD_LEN, NULL);
@@ -1734,7 +1735,7 @@ SKIP_OVERLOAD:;
 				len_call = NULL;
 				break;
 			case TYPE_SLICE:
-				if (!sema_analyse_expr(context, enum_val)) return false;
+				if (!sema_analyse_expr_rvalue(context, enum_val)) return false;
 				len_call = expr_new_expr(EXPR_SLICE_LEN, enumerator);
 				expr_rewrite_slice_len(len_call, enum_val, type_isz);
 				break;
@@ -1823,11 +1824,8 @@ SKIP_OVERLOAD:;
 	if (is_reverse)
 	{
 		// Create __idx$ > 0
-		cond = expr_new(EXPR_BINARY, idx_decl->span);
-		cond->binary_expr.operator = BINARYOP_GT;
-		cond->binary_expr.left = exprid(expr_variable(idx_decl));
 		Expr *rhs = expr_new_const_int(enumerator->span, index_type, 0);
-		cond->binary_expr.right = exprid(rhs);
+		cond = expr_new_binary(idx_decl->span, expr_variable(idx_decl), rhs, BINARYOP_GT);
 
 		// Create --__idx$
 		Expr *dec = expr_new(EXPR_UNARY, idx_decl->span);
@@ -1991,20 +1989,23 @@ static inline bool sema_analyse_if_stmt(SemaContext *context, Ast *statement)
 		SCOPE_START_WITH_LABEL(statement->if_stmt.flow.label);
 			if (result == COND_FALSE) context->active_scope.is_dead = true;
 			success = success && sema_analyse_statement(context, then);
-			then_jump = context->active_scope.end_jump.active;
+			then_jump = context->active_scope.end_jump.active && !(statement->if_stmt.flow.label && statement->if_stmt.flow.has_break);
 		SCOPE_END;
 
 		if (!success) goto END;
 		else_jump = false;
 		if (statement->if_stmt.else_body)
 		{
+			bool store_break = statement->if_stmt.flow.has_break;
+			statement->if_stmt.flow.has_break = false;
 			SCOPE_START_WITH_LABEL(statement->if_stmt.flow.label);
 				if (result == COND_TRUE) context->active_scope.is_dead = true;
 				sema_remove_unwraps_from_try(context, cond);
 				sema_unwrappable_from_catch_in_else(context, cond);
 				success = success && sema_analyse_statement(context, else_body);
-				else_jump = context->active_scope.end_jump.active;
+				else_jump = context->active_scope.end_jump.active && !(statement->if_stmt.flow.label && statement->if_stmt.flow.has_break);
 			SCOPE_END;
+			statement->if_stmt.flow.has_break |= store_break;
 		}
 
 END:
@@ -2024,6 +2025,7 @@ END:
 	}
 	if (then_jump && else_jump && !statement->flow.has_break)
 	{
+
 		SET_JUMP_END(context, statement);
 	}
 	else if (then_jump && result == COND_TRUE)
@@ -2980,7 +2982,7 @@ bool sema_analyse_ct_assert_stmt(SemaContext *context, Ast *statement)
 	Expr *message_expr = message ? exprptr(message) : NULL;
 	if (message_expr)
 	{
-		if (!sema_analyse_expr(context, message_expr)) return false;
+		if (!sema_analyse_expr_rvalue(context, message_expr)) return false;
 		if (message_expr->expr_kind != EXPR_CONST || message_expr->const_expr.const_kind != CONST_STRING)
 		{
 			RETURN_SEMA_ERROR(message_expr, "Expected a string as the error message.");
@@ -3012,7 +3014,7 @@ bool sema_analyse_ct_assert_stmt(SemaContext *context, Ast *statement)
 bool sema_analyse_ct_echo_stmt(SemaContext *context, Ast *statement)
 {
 	Expr *message = statement->expr_stmt;
-	if (!sema_analyse_expr(context, message)) return false;
+	if (!sema_analyse_expr_rvalue(context, message)) return false;
 	if (message->expr_kind != EXPR_CONST)
 	{
 		SEMA_ERROR(message, "Expected a constant value.");
@@ -3279,7 +3281,7 @@ static bool sema_analyse_optional_returns(SemaContext *context, Ast *directive)
 		{
 			RETURN_SEMA_ERROR(expr, "Expected a fault name here.");
 		}
-		if (!sema_analyse_expr(context, expr)) return false;
+		if (!sema_analyse_expr_rvalue(context, expr)) return false;
 		if (!expr_is_const_fault(expr)) RETURN_SEMA_ERROR(expr, "A fault is required.");
 		Decl *decl = expr->const_expr.fault;
 		if (!decl) RETURN_SEMA_ERROR(expr, "A non-null fault is required.");

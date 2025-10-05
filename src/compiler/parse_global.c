@@ -1656,6 +1656,10 @@ bool parse_parameters(ParseContext *c, Decl ***params_ref, Variadic *variadic, i
 					print_error_after(c->prev_span, "Expected a parameter.");
 					return false;
 				}
+				if (parse_kind == PARAM_PARSE_MACRO && ellipsis && type)
+				{
+					print_error_after(c->prev_span, "A typed macro vaarg must have a parameter name.");
+				}
 				no_name = true;
 				span = c->prev_span;
 				param_kind = VARDECL_PARAM;
@@ -1791,6 +1795,12 @@ static bool parse_struct_body(ParseContext *c, Decl *parent)
 				member = decl_new_with_type(symstr(c), c->span, decl_kind);
 				advance_and_verify(c, TOKEN_IDENT);
 			}
+			scratch_buffer_clear();
+			scratch_buffer_append(parent->type->name);
+			scratch_buffer_append(".");
+			scratch_buffer_append(member->name ? member->name : "$anon");
+			member->type->name = scratch_buffer_interned();
+
 			member->strukt.parent = declid(parent);
 			if (decl_kind == DECL_BITSTRUCT)
 			{
@@ -1890,15 +1900,15 @@ static inline Decl *parse_typedef_declaration(ParseContext *c)
 {
 	advance_and_verify(c, TOKEN_TYPEDEF);
 
-	Decl *decl = decl_new_with_type(symstr(c), c->span, DECL_DISTINCT);
+	Decl *decl = decl_new_with_type(symstr(c), c->span, DECL_TYPEDEF);
 
 	if (!consume_type_name(c, "distinct type")) return poisoned_decl;
 	if (!parse_interface_impls(c, &decl->interfaces)) return poisoned_decl;
 
 	if (!parse_attributes_for_global(c, decl)) return poisoned_decl;
 
-	decl->type->type_kind = TYPE_DISTINCT;
-	decl->decl_kind = DECL_DISTINCT;
+	decl->type->type_kind = TYPE_TYPEDEF;
+	decl->decl_kind = DECL_TYPEDEF;
 
 	CONSUME_OR_RET(TOKEN_EQ, poisoned_decl);
 
@@ -1910,7 +1920,7 @@ static inline Decl *parse_typedef_declaration(ParseContext *c)
 		return poisoned_decl;
 	}
 	// 2. Now parse the type which we know is here.
-	ASSIGN_TYPE_OR_RET(decl->distinct, parse_type(c), poisoned_decl);
+	ASSIGN_TYPE_OR_RET(decl->distinct, parse_optional_type(c), poisoned_decl);
 
 	ASSERT(!tok_is(c, TOKEN_LBRACE));
 
@@ -2169,8 +2179,8 @@ static inline Decl *parse_alias_type(ParseContext *c)
 	// 1. Did we have `fn`? In that case it's a function pointer.
 	if (try_consume(c, TOKEN_FN))
 	{
-		decl->decl_kind = DECL_TYPEDEF;
-		decl_add_type(decl, TYPE_TYPEDEF);
+		decl->decl_kind = DECL_TYPE_ALIAS;
+		decl_add_type(decl, TYPE_ALIAS);
 		decl->type_alias_decl.is_func = true;
 		Decl *decl_type = decl_new(DECL_FNTYPE, decl->name, c->prev_span);
 		decl->type_alias_decl.decl = decl_type;
@@ -2214,8 +2224,8 @@ static inline Decl *parse_alias_type(ParseContext *c)
 
 	decl->type_alias_decl.type_info = type_info;
 	decl->type_alias_decl.is_func = false;
-	decl->decl_kind = DECL_TYPEDEF;
-	decl_add_type(decl, TYPE_TYPEDEF);
+	decl->decl_kind = DECL_TYPE_ALIAS;
+	decl_add_type(decl, TYPE_ALIAS);
 	if (type_info->kind == TYPE_INFO_IDENTIFIER && type_info->resolve_status == RESOLVE_NOT_DONE
 		&& type_info->unresolved.name == decl->name)
 	{

@@ -1,5 +1,14 @@
 # C3C Release Notes
 
+## 0.7.7 Change list
+
+### Changes / improvements
+
+### Fixes
+- Bug in `io::write_using_write_byte`.
+
+### Stdlib changes
+
 ## 0.7.6 Change list
 
 ### Changes / improvements
@@ -8,6 +17,12 @@
 - `$alignof`, `$offsetof` and `$nameof` can now be used in `$defined`.
 - Infer generic parameters lhs -> rhs: `List{int} x = list::NOHEAP`.
 - Unify generic and regular module namespace.
+- `env::PROJECT_VERSION` now returns the version in project.json.
+- Comparing slices and arrays of user-defined types that implement == operator now works #2486.
+- Add 'loop-vectorize', 'slp-vectorize', 'unroll-loops' and 'merge-functions' optimization flags #2491. 
+- Add exec timings to -vv output #2490.
+- Support #! as a comment on the first line only.
+- Add `+++=` operator.
 
 ### Fixes
 - Compiler assert with var x @noinit = 0 #2452
@@ -28,8 +43,22 @@
 - Compile time switch over type would not correctly compare function pointer types.
 - Regression: Compiler segfault when assigning struct literal with too few members #2483
 - Fix compile time format check when the formatting string is a constant slice.
+- Compiler segfault for invalid e-mails in project.json. #2488
+- Taking `.ordinal` from an enum passed by pointer and then taking the address of this result would return the enum, not int.
+- Alias and distinct types didn't check the underlying type wasn't compile time or optional.
+- Incorrect nameof on nested struct names. #2492
+- Issue not correctly aborting compilation on recursive generics.
+- Crash during codegen when taking the typeid of an empty enum with associated values.
+- Assert when the binary doesn't get created and --run-once is used. #2502
+- Prevent `foo.bar = {}` when `bar` is a flexible array member. #2497
+- Fix several issues relating to multi-level inference like `int[*][*]` #2505
+- `$for int $a = 1; $a < 2; $a++` would not parse.
+- Fix lambda-in-macro visibility, where lambdas would sometimes not correctly link if used through a macro.
+- Dead code analysis with labelled `if` did not work properly.
+- Compiler segfault when splatting variable that does not exist in untyped vaarg macro #2509
 
 ### Stdlib changes
+- Added Advanced Encryption Standard (AES) algorithm (ECB, CTR, CBC modes) in `std::crypto::aes`.
 - Added generic `InterfaceList` to store a list of values that implement a specific interface
 - Added `path::home_directory`, `path::documents_directory`, `path::videos_directory`, `path::pictures_directory`, `path::desktop_directory`, `path::screenshots_directory`,
   `path::public_share_directory`, `path::templates_directory`, `path::saved_games_directory`, `path::music_directory`, `path::downloads_directory`.

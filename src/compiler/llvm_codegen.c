@@ -277,6 +277,7 @@ LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_
 			AlignSize expected_align = llvm_abi_alignment(c, element_type_llvm);
 			ConstInitializer **elements = const_init->init_array.elements;
 			ASSERT(vec_size(elements) > 0 && "Array should always have gotten at least one element.");
+			if (elements > 0 && array_type->type_kind == TYPE_FLEXIBLE_ARRAY) was_modified = true;
 			ArrayIndex current_index = 0;
 			unsigned alignment = 0;
 			LLVMValueRef *parts = NULL;
@@ -371,15 +372,15 @@ LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_
 			ByteSize prev_size = 0;
 			for (ArrayIndex i = 0; i < count; i++)
 			{
-				if (members[i]->padding)
+				Decl *member = members[i];
+				if (member->padding)
 				{
-					vec_add(entries, llvm_emit_const_padding(c, members[i]->padding));
+					vec_add(entries, llvm_emit_const_padding(c, member->padding));
 				}
-				LLVMTypeRef expected_type = llvm_get_type(c, const_init->init_struct[i]->type);
 				LLVMValueRef element = llvm_emit_const_initializer(c, const_init->init_struct[i]);
 				LLVMTypeRef element_type = LLVMTypeOf(element);
 				//ASSERT(LLVMIsConstant(element));
-				if (expected_type != element_type)
+				if (llvm_get_type(c, member->type) != element_type)
 				{
 					was_modified = true;
 				}
@@ -392,11 +393,11 @@ LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_
 					// What is the expected offset we would get?
 					ByteSize new_offset = is_packed ? old_offset + prev_size : aligned_offset(old_offset + prev_size, llvm_abi_alignment(c, element_type));
 					// Add the padding we have built in.
-					new_offset += members[i]->padding;
+					new_offset += member->padding;
 					// If this offset is too small, add const padding.
-					if (new_offset < members[i]->offset)
+					if (new_offset < member->offset)
 					{
-						vec_add(entries, llvm_emit_const_padding(c, members[i]->offset - new_offset));
+						vec_add(entries, llvm_emit_const_padding(c, member->offset - new_offset));
 					}
 				}
 				prev_size = llvm_abi_size(c, element_type);
@@ -989,7 +990,7 @@ static void llvm_emit_type_decls(GenContext *context, Decl *decl)
 		case DECL_ERASED:
 		case DECL_FNTYPE:
 			UNREACHABLE_VOID;
-		case DECL_TYPEDEF:
+		case DECL_TYPE_ALIAS:
 			if (decl->type_alias_decl.is_func)
 			{
 				REMINDER("Emit func typeid");
@@ -1000,7 +1001,7 @@ static void llvm_emit_type_decls(GenContext *context, Decl *decl)
 			UNREACHABLE_VOID
 		case DECL_INTERFACE:
 			break;
-		case DECL_DISTINCT:
+		case DECL_TYPEDEF:
 		case DECL_STRUCT:
 		case DECL_UNION:
 		case DECL_ENUM:
@@ -1360,7 +1361,7 @@ LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 		case DECL_ATTRIBUTE:
 		case DECL_BITSTRUCT:
 		case DECL_CT_ASSERT:
-		case DECL_DISTINCT:
+		case DECL_TYPEDEF:
 		case DECL_ENUM:
 		case DECL_CONST_ENUM:
 		case DECL_ENUM_CONSTANT:
@@ -1369,7 +1370,7 @@ LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 		case DECL_LABEL:
 		case DECL_MACRO:
 		case DECL_STRUCT:
-		case DECL_TYPEDEF:
+		case DECL_TYPE_ALIAS:
 		case DECL_UNION:
 		case DECL_DECLARRAY:
 		case DECL_BODYPARAM:
