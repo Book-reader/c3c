@@ -2695,7 +2695,8 @@ static inline bool sema_expr_setup_call_analysis(SemaContext *context, CalledDec
 		expr->expr_other_context.inner = expr_inner;
 		expr->expr_other_context.context = context;
 	}
-	macro_context->macro_varargs = callee->macro && callee->signature->variadic == VARIADIC_RAW ? call_expr->call_expr.varargs : NULL;
+	macro_context->macro_has_vaargs = callee->macro && callee->signature->variadic == VARIADIC_RAW;
+	macro_context->macro_varargs = macro_context->macro_has_vaargs ? call_expr->call_expr.varargs : NULL;
 	macro_context->original_inline_line = context->original_inline_line ? context->original_inline_line : call_expr->span.row;
 	macro_context->original_module = context->original_module ? context->original_module : context->compilation_unit->module;
 	macro_context->macro_params = params;
@@ -3855,7 +3856,7 @@ static inline bool sema_expr_resolve_subscript_index(SemaContext *context, Expr 
 	}
 	else
 	{
-		if (!sema_analyse_expr(context, index))
+		if (!sema_analyse_expr_rvalue(context, index))
 		{
 			expr_poison(index);
 			return false;
@@ -3875,7 +3876,7 @@ static inline bool sema_expr_resolve_subscript_index(SemaContext *context, Expr 
 	ArrayIndex size;
 	bool check_len = !context->call_env.in_no_eval || current_type == type_untypedlist;
 	Expr *len_expr = current_expr->expr_kind == EXPR_CT_IDENT ? current_expr->ct_ident_expr.decl->var.init_expr : current_expr;
-	if (expr_is_const_int(index) && (size = sema_len_from_expr(len_expr)) >= 0)
+	if (sema_cast_const(index)&& expr_is_const_int(index) && (size = sema_len_from_expr(len_expr)) >= 0)
 	{
 		// 4c. And that it's in range.
 		if (int_is_neg(index->const_expr.ixx))
@@ -6904,7 +6905,7 @@ static bool sema_expr_analyse_assign(SemaContext *context, Expr *expr, Expr *lef
 	}
 	if (left->expr_kind == EXPR_BITACCESS)
 	{
-		if (!sema_bit_assignment_check(context, right, left->access_resolved_expr.ref)) return false;
+		if (!sema_bit_assignment_check(context, right, left->access_resolved_expr.ref, failed_ref)) return false;
 		expr->expr_kind = EXPR_BITASSIGN;
 	}
 	return true;
@@ -10986,9 +10987,9 @@ static inline bool sema_expr_analyse_ct_arg(SemaContext *context, Type *infer_ty
 {
 	ASSERT_SPAN(expr, expr->resolve_status == RESOLVE_RUNNING);
 	TokenType type = expr->ct_arg_expr.type;
-	if (!context->current_macro)
+	if (!context->macro_has_vaargs)
 	{
-		RETURN_SEMA_ERROR(expr, "'%s' can only be used inside of a macro.", token_type_to_string(type));
+		RETURN_SEMA_ERROR(expr, "'%s' can only be used inside of a macro with untyped vaargs.", token_type_to_string(type));
 	}
 	switch (type)
 	{
@@ -12309,7 +12310,7 @@ static inline bool sema_insert_binary_overload(SemaContext *context, Expr *expr,
 }
 
 // Check if the assignment fits
-bool sema_bit_assignment_check(SemaContext *context, Expr *right, Decl *member)
+bool sema_bit_assignment_check(SemaContext *context, Expr *right, Decl *member, bool *failed_ref)
 {
 	// Don't check non-consts and non integers.
 	if (!sema_cast_const(right) || !type_is_integer(right->type)) return true;
@@ -12321,6 +12322,7 @@ bool sema_bit_assignment_check(SemaContext *context, Expr *right, Decl *member)
 
 	if (int_bits_needed(right->const_expr.ixx) > bits)
 	{
+		if (failed_ref) return *failed_ref = true, false;
 		RETURN_SEMA_ERROR(right, "This constant would be truncated if stored in the "
 								 "bitstruct, do you need a wider bit range?");
 	}
