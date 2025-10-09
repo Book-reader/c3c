@@ -855,7 +855,9 @@ static void parse_option(BuildOptions *options)
 			if (match_longopt("riscvext"))
 			{
 				if (at_end()) error_exit("error: --riscvext needs an argument");
-				vec_add(options->riscv_extensions, next_arg());
+				const char* ext = next_arg();
+				if (!str_is_valid_lowercase_name(ext[0] == '-' ? &ext[1] : ext)) error_exit("error: --riscvext expects a valid lowercase extension name");
+				vec_add(options->riscv_extensions, ext);
 				return;
 			}
 			if ((argopt = match_argopt("fp-math")))
